@@ -1,0 +1,26 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# Downloaded Flic binaries
+flic/FlicSDK.exe
+flic/flicd
+
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wmv
+*.flv
+*.m4v
+
+# Config files with user data
+video-config.json
+flic-bluetooth-config.json
+
+# Don't ignore the placeholder
+!flic/fliclibNodeJs.js

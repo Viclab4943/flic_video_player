@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flic Video Player - Launcher</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Flic Video Player</h1>
+            <p class="subtitle">Configure videos and Bluetooth buttons</p>
+        </header>
+
+        <main>
+            <!-- Video Configuration Section -->
+            <section class="card">
+                <h2>Video Slots</h2>
+                <div class="video-slots">
+                    <div class="video-slot">
+                        <label>Default Video (loops when idle)</label>
+                        <div class="input-group">
+                            <input type="text" id="defaultVideo" placeholder="Select default video..." readonly>
+                            <button class="btn btn-secondary" onclick="selectVideo('default')">Browse</button>
+                        </div>
+                    </div>
+
+                    <div id="videoSlotsList"></div>
+
+                    <button class="btn btn-secondary btn-small" onclick="addVideoSlot()">+ Add Video Slot</button>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-primary" onclick="saveVideoConfig()">Save Video Config</button>
+                </div>
+            </section>
+
+            <!-- Flic Buttons Section -->
+            <section class="card">
+                <h2>Flic Buttons (Bluetooth)</h2>
+                <div class="status-bar" id="flicStatusBar">
+                    <span class="status-indicator" id="flicStatusIndicator"></span>
+                    <span id="flicStatusText">Initializing...</span>
+                </div>
+
+                <div id="pairedButtonsList" class="buttons-list">
+                    <!-- Buttons will be populated here -->
+                </div>
+
+                <div id="pairingSection" class="pairing-section hidden">
+                    <div class="pairing-status">
+                        <div class="spinner"></div>
+                        <p id="pairingStatusText">Scanning for buttons...</p>
+                        <p class="pairing-hint">Press and hold your Flic button until it connects.</p>
+                    </div>
+                    <button class="btn btn-secondary" onclick="cancelPairing()">Cancel</button>
+                </div>
+
+                <div class="actions">
+                    <button class="btn btn-secondary" id="pairButton" onclick="startPairing()">
+                        + Pair New Button
+                    </button>
+                </div>
+            </section>
+
+            <!-- Launch Section -->
+            <section class="card launch-section">
+                <button class="btn btn-launch" onclick="launchPlayer()">
+                    Launch Player
+                </button>
+                <p class="hint">Opens fullscreen video player. Press ESC to exit.</p>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // State
+        let videoConfig = { defaultVideo: '', videos: {} };
+        let flicConfig = { buttons: {} };
+        let buttonStatuses = {};
+        let videoSlotCount = 0;
+
+        // Initialize
+        async function init() {
+            await loadConfigs();
+            setupEventListeners();
+            renderVideoSlots();
+            await refreshButtons();
+        }
+
+        // Load configurations
+        async function loadConfigs() {
+            try {
+                videoConfig = await window.electronAPI.getVideoConfig();
+                flicConfig = await window.electronAPI.getFlicConfig();
+            } catch (err) {
+                console.error('Error loading configs:', err);
+            }
+        }
+
+        // Setup IPC event listeners
+        function setupEventListeners() {
+            window.electronAPI.onFlicStatus((data) => {
+                updateFlicStatus(data);
+            });
+
+            window.electronAPI.onButtonStatusChanged((data) => {
+                buttonStatuses[data.bdAddr] = data.status;
+                renderButtons();
+            });
+
+            window.electronAPI.onPairingStatus((data) => {
+                updatePairingStatus(data);
+            });
+
+            window.electronAPI.onButtonPaired((bdAddr) => {
+                refreshButtons();
+            });
+
+            window.electronAPI.onButtonRemoved((bdAddr) => {
+                delete flicConfig.buttons[bdAddr];
+                refreshButtons();
+            });
+        }
+
+        // Update Flic daemon status
+        function updateFlicStatus(data) {
+            const indicator = document.getElementById('flicStatusIndicator');
+            const text = document.getElementById('flicStatusText');
+
+            indicator.className = 'status-indicator';
+
+            switch (data.status) {
+                case 'connected':
+                    indicator.classList.add('connected');
+                    text.textContent = 'Connected';
+                    document.getElementById('pairButton').disabled = false;
+                    break;
+                case 'disconnected':
+                    indicator.classList.add('disconnected');
+                    text.textContent = 'Disconnected';
+                    document.getElementById('pairButton').disabled = true;
+                    break;
+                case 'error':
+                    indicator.classList.add('error');
+                    text.textContent = `Error: ${data.message}`;
+                    document.getElementById('pairButton').disabled = true;
+                    break;
+                default:
+                    text.textContent = data.status || 'Unknown';
+            }
+        }
+
+        // Render video slots
+        function renderVideoSlots() {
+            const container = document.getElementById('videoSlotsList');
+            container.innerHTML = '';
+
+            // Set default video
+            document.getElementById('defaultVideo').value = videoConfig.defaultVideo || '';
+
+            // Render configured video slots
+            const videoKeys = Object.keys(videoConfig.videos || {}).sort((a, b) => {
+                const numA = parseInt(a.replace('video', ''));
+                const numB = parseInt(b.replace('video', ''));
+                return numA - numB;
+            });
+
+            videoSlotCount = 0;
+            videoKeys.forEach((key) => {
+                const num = parseInt(key.replace('video', ''));
+                if (num > videoSlotCount) videoSlotCount = num;
+                addVideoSlotElement(num, videoConfig.videos[key]);
+            });
+
+            // Add at least 5 slots if none exist
+            if (videoSlotCount === 0) {
+                for (let i = 1; i <= 5; i++) {
+                    addVideoSlotElement(i, '');
+                }
+                videoSlotCount = 5;
+            }
+        }
+
+        // Add video slot element
+        function addVideoSlotElement(num, value) {
+            const container = document.getElementById('videoSlotsList');
+            const div = document.createElement('div');
+            div.className = 'video-slot';
+            div.id = `videoSlot${num}`;
+            div.innerHTML = `
+                <label>Video ${num}</label>
+                <div class="input-group">
+                    <input type="text" id="video${num}" value="${value || ''}" placeholder="Select video ${num}..." readonly>
+                    <button class="btn btn-secondary" onclick="selectVideo(${num})">Browse</button>
+                    <button class="btn btn-danger btn-icon" onclick="removeVideoSlot(${num})">×</button>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+
+        // Add new video slot
+        function addVideoSlot() {
+            videoSlotCount++;
+            addVideoSlotElement(videoSlotCount, '');
+        }
+
+        // Remove video slot
+        function removeVideoSlot(num) {
+            const element = document.getElementById(`videoSlot${num}`);
+            if (element) {
+                element.remove();
+                delete videoConfig.videos[`video${num}`];
+            }
+        }
+
+        // Select video file
+        async function selectVideo(slot) {
+            const filePath = await window.electronAPI.selectVideoFile();
+            if (filePath) {
+                if (slot === 'default') {
+                    document.getElementById('defaultVideo').value = filePath;
+                } else {
+                    document.getElementById(`video${slot}`).value = filePath;
+                }
+            }
+        }
+
+        // Save video configuration
+        async function saveVideoConfig() {
+            videoConfig.defaultVideo = document.getElementById('defaultVideo').value;
+            videoConfig.videos = {};
+
+            // Collect all video slots
+            const slots = document.querySelectorAll('[id^="videoSlot"]');
+            slots.forEach((slot) => {
+                const num = slot.id.replace('videoSlot', '');
+                const input = document.getElementById(`video${num}`);
+                if (input && input.value) {
+                    videoConfig.videos[`video${num}`] = input.value;
+                }
+            });
+
+            const success = await window.electronAPI.saveVideoConfig(videoConfig);
+            if (success) {
+                showNotification('Video configuration saved!', 'success');
+            } else {
+                showNotification('Failed to save configuration', 'error');
+            }
+        }
+
+        // Refresh buttons list
+        async function refreshButtons() {
+            try {
+                const pairedButtons = await window.electronAPI.getPairedButtons();
+                flicConfig = await window.electronAPI.getFlicConfig();
+
+                // Merge paired buttons with config
+                pairedButtons.forEach((bdAddr) => {
+                    if (!flicConfig.buttons[bdAddr]) {
+                        flicConfig.buttons[bdAddr] = {
+                            name: `Button ${Object.keys(flicConfig.buttons).length + 1}`,
+                            videoNumber: 1
+                        };
+                    }
+                });
+
+                renderButtons();
+            } catch (err) {
+                console.error('Error refreshing buttons:', err);
+            }
+        }
+
+        // Render buttons list
+        function renderButtons() {
+            const container = document.getElementById('pairedButtonsList');
+            const buttons = Object.entries(flicConfig.buttons);
+
+            if (buttons.length === 0) {
+                container.innerHTML = '<p class="empty-message">No buttons paired yet. Click "Pair New Button" to add one.</p>';
+                return;
+            }
+
+            container.innerHTML = buttons.map(([bdAddr, button]) => {
+                const status = buttonStatuses[bdAddr] || 'Unknown';
+                const statusClass = status === 'Ready' ? 'connected' : (status === 'Connected' ? 'connecting' : 'disconnected');
+
+                return `
+                    <div class="button-item">
+                        <div class="button-info">
+                            <span class="status-indicator ${statusClass}"></span>
+                            <div class="button-details">
+                                <input type="text" class="button-name" value="${button.name}"
+                                    onchange="updateButtonName('${bdAddr}', this.value)">
+                                <span class="button-address">${bdAddr}</span>
+                                <span class="button-status">${status}</span>
+                            </div>
+                        </div>
+                        <div class="button-controls">
+                            <select onchange="updateButtonMapping('${bdAddr}', this.value)">
+                                ${generateVideoOptions(button.videoNumber)}
+                            </select>
+                            <button class="btn btn-danger btn-icon" onclick="removeButton('${bdAddr}')" title="Remove button">×</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Generate video options for dropdown
+        function generateVideoOptions(selectedNum) {
+            let options = '';
+            for (let i = 1; i <= 15; i++) {
+                options += `<option value="${i}" ${selectedNum === i ? 'selected' : ''}>Video ${i}</option>`;
+            }
+            return options;
+        }
+
+        // Update button name
+        async function updateButtonName(bdAddr, name) {
+            flicConfig.buttons[bdAddr].name = name;
+            await window.electronAPI.setButtonMapping(bdAddr, flicConfig.buttons[bdAddr].videoNumber, name);
+        }
+
+        // Update button mapping
+        async function updateButtonMapping(bdAddr, videoNumber) {
+            const num = parseInt(videoNumber);
+            flicConfig.buttons[bdAddr].videoNumber = num;
+            await window.electronAPI.setButtonMapping(bdAddr, num, flicConfig.buttons[bdAddr].name);
+            showNotification(`Button mapped to Video ${num}`, 'success');
+        }
+
+        // Start pairing
+        async function startPairing() {
+            document.getElementById('pairingSection').classList.remove('hidden');
+            document.getElementById('pairButton').disabled = true;
+
+            try {
+                await window.electronAPI.startButtonPairing();
+                showNotification('Button paired successfully!', 'success');
+            } catch (err) {
+                showNotification(`Pairing failed: ${err.message}`, 'error');
+            } finally {
+                document.getElementById('pairingSection').classList.add('hidden');
+                document.getElementById('pairButton').disabled = false;
+            }
+        }
+
+        // Update pairing status
+        function updatePairingStatus(data) {
+            const statusText = document.getElementById('pairingStatusText');
+            statusText.textContent = data.message;
+
+            if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
+                document.getElementById('pairingSection').classList.add('hidden');
+                document.getElementById('pairButton').disabled = false;
+                refreshButtons();
+            }
+        }
+
+        // Cancel pairing
+        function cancelPairing() {
+            window.electronAPI.cancelButtonPairing();
+            document.getElementById('pairingSection').classList.add('hidden');
+            document.getElementById('pairButton').disabled = false;
+        }
+
+        // Remove button
+        async function removeButton(bdAddr) {
+            if (confirm('Remove this button?')) {
+                try {
+                    await window.electronAPI.removeButton(bdAddr);
+                    delete flicConfig.buttons[bdAddr];
+                    renderButtons();
+                    showNotification('Button removed', 'success');
+                } catch (err) {
+                    showNotification(`Failed to remove: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        // Launch player
+        async function launchPlayer() {
+            // Save config first
+            await saveVideoConfig();
+
+            const success = await window.electronAPI.launchPlayer();
+            if (!success) {
+                showNotification('Failed to launch player', 'error');
+            }
+        }
+
+        // Show notification
+        function showNotification(message, type) {
+            const existing = document.querySelector('.notification');
+            if (existing) existing.remove();
+
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

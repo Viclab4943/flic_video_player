@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Player</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            cursor: none;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        /* Rotation classes for videos with incorrect orientation */
+        .rotate-180 {
+            transform: rotate(180deg);
+        }
+
+        .rotate-90 {
+            transform: rotate(90deg);
+        }
+
+        .rotate-270 {
+            transform: rotate(270deg);
+        }
+
+        #videoA {
+            z-index: 1;
+        }
+
+        #videoB {
+            z-index: 2;
+            opacity: 0;
+        }
+
+        .video-active {
+            opacity: 1 !important;
+        }
+
+        .video-hidden {
+            opacity: 0 !important;
+        }
+
+        #connectionStatus {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            font-family: system-ui, sans-serif;
+            font-size: 14px;
+            border-radius: 5px;
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        #connectionStatus.visible {
+            opacity: 1;
+        }
+
+        #connectionStatus.connected {
+            background: rgba(0, 128, 0, 0.7);
+        }
+
+        #connectionStatus.disconnected {
+            background: rgba(255, 0, 0, 0.7);
+        }
+    </style>
+</head>
+<body>
+    <div class="video-container">
+        <video id="videoA" autoplay loop muted playsinline></video>
+        <video id="videoB" autoplay playsinline></video>
+    </div>
+    <div id="connectionStatus">Connecting...</div>
+
+    <script>
+        // Video elements
+        const videoA = document.getElementById('videoA');
+        const videoB = document.getElementById('videoB');
+        const connectionStatus = document.getElementById('connectionStatus');
+
+        // State
+        let activeVideo = 'A';
+        let isPlayingAction = false;
+        let defaultVideoPath = null;
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
+        let rotationA = 0; // Rotation for videoA
+        let rotationB = 0; // Rotation for videoB
+
+        // Connect to WebSocket server
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:8765');
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                reconnectAttempts = 0;
+                showStatus('Connected', 'connected');
+                setTimeout(() => hideStatus(), 2000);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleMessage(message);
+                } catch (err) {
+                    console.error('Error parsing message:', err);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                showStatus('Disconnected', 'disconnected');
+                attemptReconnect();
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        // Attempt to reconnect
+        function attemptReconnect() {
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                showStatus('Connection failed', 'disconnected');
+                return;
+            }
+
+            reconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+            console.log(`Reconnecting in ${delay}ms...`);
+
+            setTimeout(connectWebSocket, delay);
+        }
+
+        // Handle incoming messages
+        function handleMessage(message) {
+            console.log('Received:', message);
+
+            switch (message.type) {
+                case 'changeVideo':
+                    playVideo(message.videoPath, message.muted);
+                    break;
+
+                case 'returnToDefault':
+                    returnToDefault();
+                    break;
+
+                case 'togglePause':
+                    togglePause();
+                    break;
+            }
+        }
+
+        // Stop a video completely
+        function stopVideo(video) {
+            video.pause();
+            video.currentTime = 0;
+            video.oncanplay = null;
+            video.onended = null;
+            // Clear source after a brief delay to allow fade out
+            setTimeout(() => {
+                if (video.classList.contains('video-hidden')) {
+                    video.src = '';
+                    video.load();
+                }
+            }, 600);
+        }
+
+        // Play a video with crossfade
+        function playVideo(videoPath, muted = false) {
+            if (!videoPath) return;
+
+            console.log(`Playing video: ${videoPath} (muted: ${muted})`);
+            isPlayingAction = true;
+
+            // Use file:// protocol for local files
+            const src = videoPath.startsWith('/') || videoPath.match(/^[A-Za-z]:/)
+                ? `file://${videoPath}`
+                : videoPath;
+
+            // Determine which video element to use
+            const currentVideo = activeVideo === 'A' ? videoA : videoB;
+            const nextVideo = activeVideo === 'A' ? videoB : videoA;
+
+            // Prepare next video
+            clearRotation(nextVideo);
+            if (activeVideo === 'A') {
+                rotationB = 0; // Reset rotation for videoB
+            } else {
+                rotationA = 0; // Reset rotation for videoA
+            }
+            nextVideo.src = src;
+            nextVideo.muted = muted;
+            nextVideo.loop = false;
+
+            nextVideo.oncanplay = () => {
+                // Crossfade
+                nextVideo.classList.add('video-active');
+                nextVideo.classList.remove('video-hidden');
+                currentVideo.classList.add('video-hidden');
+                currentVideo.classList.remove('video-active');
+
+                nextVideo.play().catch(err => console.error('Play error:', err));
+
+                // Stop the old video (including its audio)
+                stopVideo(currentVideo);
+
+                // Switch active video
+                activeVideo = activeVideo === 'A' ? 'B' : 'A';
+            };
+
+            // When action video ends, return to default
+            nextVideo.onended = () => {
+                if (isPlayingAction) {
+                    returnToDefault();
+                }
+            };
+
+            nextVideo.load();
+        }
+
+        // Return to default video
+        function returnToDefault() {
+            if (!defaultVideoPath) return;
+
+            console.log('Returning to default video');
+            isPlayingAction = false;
+
+            const src = defaultVideoPath.startsWith('/') || defaultVideoPath.match(/^[A-Za-z]:/)
+                ? `file://${defaultVideoPath}`
+                : defaultVideoPath;
+
+            const currentVideo = activeVideo === 'A' ? videoA : videoB;
+            const nextVideo = activeVideo === 'A' ? videoB : videoA;
+
+            clearRotation(nextVideo);
+            if (activeVideo === 'A') {
+                rotationB = 0;
+            } else {
+                rotationA = 0;
+            }
+            nextVideo.src = src;
+            nextVideo.muted = true;
+            nextVideo.loop = true;
+
+            nextVideo.oncanplay = () => {
+                // Crossfade
+                nextVideo.classList.add('video-active');
+                nextVideo.classList.remove('video-hidden');
+                currentVideo.classList.add('video-hidden');
+                currentVideo.classList.remove('video-active');
+
+                nextVideo.play().catch(err => console.error('Play error:', err));
+
+                // Stop the old video (including its audio)
+                stopVideo(currentVideo);
+
+                activeVideo = activeVideo === 'A' ? 'B' : 'A';
+            };
+
+            nextVideo.onended = null;
+            nextVideo.load();
+        }
+
+        // Toggle pause
+        function togglePause() {
+            const currentVideo = activeVideo === 'A' ? videoA : videoB;
+            if (currentVideo.paused) {
+                currentVideo.play();
+            } else {
+                currentVideo.pause();
+            }
+        }
+
+        // Rotate current video only (for incorrectly oriented MOV files)
+        function rotateCurrentVideo() {
+            const currentVideo = activeVideo === 'A' ? videoA : videoB;
+            const rotationClasses = ['rotate-90', 'rotate-180', 'rotate-270'];
+
+            // Remove current rotation class
+            rotationClasses.forEach(cls => currentVideo.classList.remove(cls));
+
+            // Get and update rotation for current video
+            let rotation = activeVideo === 'A' ? rotationA : rotationB;
+            rotation = rotation === 0 ? 180 : 0;
+
+            // Store the new rotation
+            if (activeVideo === 'A') {
+                rotationA = rotation;
+            } else {
+                rotationB = rotation;
+            }
+
+            // Apply rotation
+            if (rotation !== 0) {
+                currentVideo.classList.add(`rotate-${rotation}`);
+            }
+
+            console.log(`Video ${activeVideo} rotation: ${rotation} degrees`);
+            showStatus(`Rotation: ${rotation}°`, 'connected');
+            setTimeout(() => hideStatus(), 1500);
+        }
+
+        // Clear rotation on a video element
+        function clearRotation(video) {
+            const rotationClasses = ['rotate-90', 'rotate-180', 'rotate-270'];
+            rotationClasses.forEach(cls => video.classList.remove(cls));
+        }
+
+        // Show connection status
+        function showStatus(text, className) {
+            connectionStatus.textContent = text;
+            connectionStatus.className = `visible ${className}`;
+        }
+
+        // Hide connection status
+        function hideStatus() {
+            connectionStatus.classList.remove('visible');
+        }
+
+        // Load default video from config
+        async function loadDefaultVideo() {
+            try {
+                const response = await fetch('http://localhost:5555/config');
+                const config = await response.json();
+                defaultVideoPath = config.defaultVideo;
+
+                if (defaultVideoPath) {
+                    const src = defaultVideoPath.startsWith('/') || defaultVideoPath.match(/^[A-Za-z]:/)
+                        ? `file://${defaultVideoPath}`
+                        : defaultVideoPath;
+
+                    videoA.src = src;
+                    videoA.muted = true;
+                    videoA.loop = true;
+                    videoA.classList.add('video-active');
+                    videoA.play().catch(err => console.error('Play error:', err));
+                }
+            } catch (err) {
+                console.error('Error loading config:', err);
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Number keys 1-9 for videos
+            if (e.key >= '1' && e.key <= '9') {
+                const videoNum = parseInt(e.key);
+                fetch('http://localhost:5555/changeVideo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video: videoNum, click_type: 'click' })
+                }).catch(err => console.error('Error:', err));
+            }
+
+            // 0 for default
+            if (e.key === '0') {
+                fetch('http://localhost:5555/close', { method: 'POST' })
+                    .catch(err => console.error('Error:', err));
+            }
+
+            // Space for pause
+            if (e.key === ' ') {
+                e.preventDefault();
+                togglePause();
+            }
+
+            // R to rotate current video only (fixes upside-down MOV files)
+            if (e.key === 'r' || e.key === 'R') {
+                rotateCurrentVideo();
+            }
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDefaultVideo();
+            connectWebSocket();
+        });
+    </script>
+</body>
+</html>

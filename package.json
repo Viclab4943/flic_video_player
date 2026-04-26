@@ -1,0 +1,92 @@
+{
+  "name": "flic-video-player",
+  "version": "1.0.0",
+  "description": "Fullscreen video player triggered by Flic Bluetooth buttons",
+  "main": "launcher.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder --win --mac --linux"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
+  },
+  "build": {
+    "appId": "com.videoplayerapp.flic",
+    "productName": "Flic Video Player",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!flic/FlicSDK.exe",
+      "!flic/flicd"
+    ],
+    "extraResources": [
+      {
+        "from": "flic/fliclibNodeJs.js",
+        "to": "flic/fliclibNodeJs.js"
+      }
+    ],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "assets/icon.ico",
+      "extraResources": [
+        {
+          "from": "flic/FlicSDK.exe",
+          "to": "flic/FlicSDK.exe"
+        }
+      ]
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.video",
+      "extraResources": [
+        {
+          "from": "flic/flicd",
+          "to": "flic/flicd"
+        }
+      ]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "assets/icon.png",
+      "category": "Video",
+      "extraResources": [
+        {
+          "from": "flic/flicd",
+          "to": "flic/flicd"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}
