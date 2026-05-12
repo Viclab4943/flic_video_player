@@ -29,11 +29,13 @@ class FlicManager extends EventEmitter {
         this.daemonProcess = null;
         this.client = null;
         this.connectionChannels = new Map();
+        this.batteryListeners = new Map();
         this.scanWizard = null;
         this.isConnected = false;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.maxEventAgeMs = 5000; // Ignore queued events older than this
     }
 
     /**
@@ -210,6 +212,31 @@ class FlicManager extends EventEmitter {
                 this.emit('buttonPaired', bdAddr);
                 this.listenToButton(bdAddr);
             });
+
+            // Monitor Bluetooth controller state changes
+            // States: Detached (lost connection), Resetting (reinitializing), Attached (ready)
+            this.client.on('bluetoothControllerStateChange', (state) => {
+                console.log('Bluetooth controller state changed:', state);
+                this.emit('bluetoothStateChanged', state);
+
+                if (state === 'Detached') {
+                    console.warn('Bluetooth controller detached - check USB adapter');
+                    this.emit('error', new Error('Bluetooth controller detached'));
+                } else if (state === 'Attached') {
+                    console.log('Bluetooth controller attached and ready');
+                }
+            });
+
+            // Handle connection space limits (max 8 concurrent connections)
+            this.client.on('noSpaceForNewConnection', (maxConcurrentlyConnectedButtons) => {
+                console.warn(`Connection limit reached (max ${maxConcurrentlyConnectedButtons} buttons)`);
+                this.emit('connectionLimitReached', maxConcurrentlyConnectedButtons);
+            });
+
+            this.client.on('gotSpaceForNewConnection', (maxConcurrentlyConnectedButtons) => {
+                console.log('Connection slot available');
+                this.emit('connectionSlotAvailable', maxConcurrentlyConnectedButtons);
+            });
         });
     }
 
@@ -249,7 +276,14 @@ class FlicManager extends EventEmitter {
         const channel = new fliclib.FlicConnectionChannel(bdAddr);
 
         channel.on('buttonSingleOrDoubleClickOrHold', (clickType, wasQueued, timeDiff) => {
-            console.log(`Button ${bdAddr}: ${clickType}`);
+            // Filter stale queued events (older than maxEventAgeMs)
+            // Buttons queue presses when disconnected - we don't want old presses
+            if (wasQueued && timeDiff > this.maxEventAgeMs) {
+                console.log(`Button ${bdAddr}: ${clickType} (IGNORED - stale event, ${timeDiff}ms old)`);
+                return;
+            }
+
+            console.log(`Button ${bdAddr}: ${clickType}${wasQueued ? ` (queued, ${timeDiff}ms ago)` : ''}`);
             this.emit('buttonEvent', {
                 bdAddr,
                 clickType,
@@ -428,6 +462,52 @@ class FlicManager extends EventEmitter {
      */
     getPlatform() {
         return platform;
+    }
+
+    /**
+     * Get button info (name, color, serial number, battery status, etc.)
+     */
+    getButtonInfo(bdAddr) {
+        return new Promise((resolve, reject) => {
+            if (!this.client) {
+                reject(new Error('Not connected to daemon'));
+                return;
+            }
+
+            this.client.getButtonInfo(bdAddr, (info) => {
+                resolve({
+                    bdAddr: info.bdAddr,
+                    uuid: info.uuid,
+                    color: info.color,
+                    serialNumber: info.serialNumber,
+                    name: info.name,
+                    batteryStatus: info.batteryStatus, // Percentage or -1 if unknown
+                    firmwareVersion: info.firmwareVersion,
+                    flicVersion: info.flicVersion // 1 or 2
+                });
+            });
+        });
+    }
+
+    /**
+     * Start monitoring battery status for a button
+     * Note: Battery updates only arrive when button is connected
+     */
+    startBatteryListener(bdAddr) {
+        if (!this.client || !fliclib) return;
+
+        const listener = new fliclib.FlicBatteryStatusListener(bdAddr);
+        listener.on('batteryStatus', (batteryPercentage, timestamp) => {
+            console.log(`Button ${bdAddr} battery: ${batteryPercentage}%`);
+            this.emit('batteryStatus', {
+                bdAddr,
+                percentage: batteryPercentage,
+                timestamp
+            });
+        });
+
+        this.client.addBatteryStatusListener(listener);
+        return listener;
     }
 
     /**

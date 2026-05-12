@@ -8,11 +8,13 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
-const { spawn } = require('child_process');
 
-// Server ports
-const HTTP_PORT = 5555;
-const WS_PORT = 8765;
+// Video server (runs in main process)
+const videoServer = require('./server');
+
+// Server ports (from server module)
+const HTTP_PORT = videoServer.HTTP_PORT;
+const WS_PORT = videoServer.WS_PORT;
 
 // Flic Manager
 let FlicManager;
@@ -25,7 +27,7 @@ try {
 // Global references
 let launcherWindow = null;
 let playerWindow = null;
-let serverProcess = null;
+let serverRunning = false;
 let flicManager = null;
 
 // Config paths
@@ -259,8 +261,14 @@ function createPlayerWindow() {
     });
 }
 
-// Start the Express/WebSocket server
+// Start the Express/WebSocket server (runs in main process)
 async function startServer() {
+    // Check if already running
+    if (serverRunning || videoServer.isRunning()) {
+        console.log('Server already running');
+        return;
+    }
+
     // Check if ports are available first
     const unavailablePorts = await checkRequiredPorts();
     if (unavailablePorts.length > 0) {
@@ -268,61 +276,23 @@ async function startServer() {
         throw new Error(`Ports already in use: ${portList}. Please close any other instances or applications using these ports.`);
     }
 
-    return new Promise((resolve, reject) => {
-        const serverPath = path.join(__dirname, 'server.js');
-
-        serverProcess = spawn(process.execPath, [serverPath], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            env: {
-                ...process.env,
-                VIDEOS_PATH: videosPath,
-                CACHE_PATH: cachePath,
-                VIDEO_CONFIG_PATH: videoConfigPath
-            }
-        });
-
-        let serverError = null;
-
-        serverProcess.stdout.on('data', (data) => {
-            console.log(`Server: ${data}`);
-        });
-
-        serverProcess.stderr.on('data', (data) => {
-            console.error(`Server error: ${data}`);
-            serverError = data.toString();
-        });
-
-        serverProcess.on('error', (err) => {
-            console.error('Failed to start server:', err);
-            reject(err);
-        });
-
-        serverProcess.on('exit', (code) => {
-            console.log(`Server exited with code ${code}`);
-            if (code !== 0 && code !== null) {
-                reject(new Error(`Server exited unexpectedly with code ${code}: ${serverError || 'Unknown error'}`));
-            }
-        });
-
-        // Use health check polling instead of timeout fallback
-        waitForServerReady()
-            .then(resolve)
-            .catch((err) => {
-                // Kill the server process if it failed to become ready
-                if (serverProcess) {
-                    serverProcess.kill();
-                    serverProcess = null;
-                }
-                reject(err);
-            });
+    // Start the server in the main process
+    await videoServer.start({
+        videosPath: videosPath,
+        cachePath: cachePath,
+        videoConfigPath: videoConfigPath
     });
+
+    serverRunning = true;
+    console.log('Video server started successfully');
 }
 
 // Stop the server
-function stopServer() {
-    if (serverProcess) {
-        serverProcess.kill();
-        serverProcess = null;
+async function stopServer() {
+    if (serverRunning || videoServer.isRunning()) {
+        await videoServer.stop();
+        serverRunning = false;
+        console.log('Video server stopped');
     }
 }
 
@@ -617,11 +587,11 @@ ipcMain.handle('launch-player', async () => {
     }
 });
 
-ipcMain.handle('close-player', () => {
+ipcMain.handle('close-player', async () => {
     if (playerWindow) {
         playerWindow.close();
     }
-    stopServer();
+    await stopServer();
     return true;
 });
 
@@ -646,9 +616,15 @@ app.on('window-all-closed', () => {
     }
 });
 
-app.on('before-quit', () => {
-    stopServer();
+app.on('before-quit', async (event) => {
+    // Prevent immediate quit to allow async cleanup
+    event.preventDefault();
+
+    await stopServer();
     if (flicManager) {
         flicManager.stop();
     }
+
+    // Actually quit after cleanup
+    app.exit(0);
 });
