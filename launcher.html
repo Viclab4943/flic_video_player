@@ -64,6 +64,9 @@
                 </div>
 
                 <div class="actions">
+                    <button class="btn btn-secondary" id="reconnectButton" onclick="reconnectAllButtons()">
+                        Reconnect All
+                    </button>
                     <button class="btn btn-secondary" id="pairButton" onclick="startPairing()">
                         + Pair New Button
                     </button>
@@ -413,6 +416,27 @@
             flicConfig.buttons[bdAddr].videoNumber = num;
             await window.electronAPI.setButtonMapping(bdAddr, num, flicConfig.buttons[bdAddr].name);
             showNotification(`Button mapped to Video ${num}`, 'success');
+        }
+
+        // Reconnect all buttons (force fresh connection)
+        async function reconnectAllButtons() {
+            const btn = document.getElementById('reconnectButton');
+            btn.disabled = true;
+            btn.textContent = 'Reconnecting...';
+
+            try {
+                const result = await window.electronAPI.reconnectAllButtons();
+                if (result.success) {
+                    showNotification(`Reconnected ${result.count} button(s)`, 'success');
+                } else {
+                    showNotification(result.error || 'Reconnect failed', 'error');
+                }
+            } catch (err) {
+                showNotification(`Reconnect failed: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Reconnect All';
+            }
         }
 
         // Start pairing

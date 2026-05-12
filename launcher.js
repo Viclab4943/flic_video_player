@@ -478,6 +478,17 @@ ipcMain.handle('get-paired-buttons', async () => {
     }
 });
 
+ipcMain.handle('reconnect-all-buttons', async () => {
+    if (!flicManager) throw new Error('Flic manager not initialized');
+    try {
+        const buttons = await flicManager.forceReconnectAll();
+        return { success: true, count: buttons.length };
+    } catch (err) {
+        console.error('Error reconnecting buttons:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 ipcMain.handle('start-button-pairing', async () => {
     if (!flicManager) throw new Error('Flic manager not initialized');
     return flicManager.startPairing();

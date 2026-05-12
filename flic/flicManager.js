@@ -184,10 +184,9 @@ class FlicManager extends EventEmitter {
                     console.log('Paired buttons:', info.bdAddrOfVerifiedButtons);
                     this.emit('info', info);
 
-                    // Listen to all paired buttons
-                    info.bdAddrOfVerifiedButtons.forEach((bdAddr) => {
-                        this.listenToButton(bdAddr);
-                    });
+                    // Force disconnect all buttons first, then reconnect fresh
+                    // This ensures clean connection state on each startup
+                    this.reconnectAllButtons(info.bdAddrOfVerifiedButtons);
                 });
 
                 resolve(this.client);
@@ -259,6 +258,35 @@ class FlicManager extends EventEmitter {
                 console.error('Reconnect failed:', err.message);
             });
         }, delay);
+    }
+
+    /**
+     * Force disconnect and reconnect all buttons for a clean state
+     * This helps prevent stale connections from previous sessions
+     */
+    reconnectAllButtons(buttonAddresses) {
+        if (!this.client || !buttonAddresses || buttonAddresses.length === 0) {
+            console.log('No buttons to reconnect');
+            return;
+        }
+
+        console.log(`Forcing fresh connection for ${buttonAddresses.length} button(s)...`);
+
+        // Force disconnect all buttons first
+        buttonAddresses.forEach((bdAddr) => {
+            console.log(`Force disconnecting: ${bdAddr}`);
+            this.client.forceDisconnect(bdAddr);
+        });
+
+        // Wait a moment, then create fresh connection channels
+        setTimeout(() => {
+            console.log('Creating fresh connection channels...');
+            buttonAddresses.forEach((bdAddr) => {
+                this.listenToButton(bdAddr);
+            });
+            console.log('All buttons reconnected');
+            this.emit('buttonsReconnected', buttonAddresses);
+        }, 1000);
     }
 
     /**
@@ -432,6 +460,30 @@ class FlicManager extends EventEmitter {
 
             this.client.getInfo((info) => {
                 resolve(info.bdAddrOfVerifiedButtons || []);
+            });
+        });
+    }
+
+    /**
+     * Force reconnect all paired buttons
+     * Useful when buttons become unresponsive
+     */
+    forceReconnectAll() {
+        return new Promise((resolve, reject) => {
+            if (!this.client) {
+                reject(new Error('Not connected to daemon'));
+                return;
+            }
+
+            this.client.getInfo((info) => {
+                const buttons = info.bdAddrOfVerifiedButtons || [];
+                if (buttons.length === 0) {
+                    resolve([]);
+                    return;
+                }
+
+                this.reconnectAllButtons(buttons);
+                resolve(buttons);
             });
         });
     }
