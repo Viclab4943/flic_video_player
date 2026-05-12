@@ -64,11 +64,11 @@
                 </div>
 
                 <div class="actions">
+                    <button class="btn btn-danger" id="forgetAllButton" onclick="forgetAllButtons()">
+                        Forget All
+                    </button>
                     <button class="btn btn-secondary" id="restartDaemonButton" onclick="restartDaemon()">
                         Restart Daemon
-                    </button>
-                    <button class="btn btn-secondary" id="reconnectButton" onclick="reconnectAllButtons()">
-                        Reconnect All
                     </button>
                     <button class="btn btn-secondary" id="pairButton" onclick="startPairing()">
                         + Pair New Button
@@ -419,6 +419,33 @@
             flicConfig.buttons[bdAddr].videoNumber = num;
             await window.electronAPI.setButtonMapping(bdAddr, num, flicConfig.buttons[bdAddr].name);
             showNotification(`Button mapped to Video ${num}`, 'success');
+        }
+
+        // Forget all buttons (unpair from daemon)
+        async function forgetAllButtons() {
+            if (!confirm('This will unpair ALL buttons. You will need to pair them again.\n\nContinue?')) {
+                return;
+            }
+
+            const btn = document.getElementById('forgetAllButton');
+            btn.disabled = true;
+            btn.textContent = 'Forgetting...';
+
+            try {
+                const result = await window.electronAPI.forgetAllButtons();
+                if (result.success) {
+                    showNotification(`Forgot ${result.count} button(s). Ready to pair fresh.`, 'success');
+                    flicConfig = { buttons: {} };
+                    renderButtons();
+                } else {
+                    showNotification(result.error || 'Failed to forget buttons', 'error');
+                }
+            } catch (err) {
+                showNotification(`Error: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Forget All';
+            }
         }
 
         // Restart the Flic daemon completely

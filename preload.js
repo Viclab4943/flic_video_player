@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPairedButtons: () => ipcRenderer.invoke('get-paired-buttons'),
     reconnectAllButtons: () => ipcRenderer.invoke('reconnect-all-buttons'),
     restartFlicDaemon: () => ipcRenderer.invoke('restart-flic-daemon'),
+    forgetAllButtons: () => ipcRenderer.invoke('forget-all-buttons'),
     startButtonPairing: () => ipcRenderer.invoke('start-button-pairing'),
     cancelButtonPairing: () => ipcRenderer.invoke('cancel-button-pairing'),
     removeButton: (bdAddr) => ipcRenderer.invoke('remove-button', bdAddr),

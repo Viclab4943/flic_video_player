@@ -500,6 +500,22 @@ ipcMain.handle('restart-flic-daemon', async () => {
     }
 });
 
+ipcMain.handle('forget-all-buttons', async () => {
+    if (!flicManager) throw new Error('Flic manager not initialized');
+    try {
+        // Forget from daemon
+        const count = await flicManager.forgetAllButtons();
+
+        // Also clear the config file
+        saveFlicConfig({ buttons: {} });
+
+        return { success: true, count };
+    } catch (err) {
+        console.error('Error forgetting buttons:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 ipcMain.handle('start-button-pairing', async () => {
     if (!flicManager) throw new Error('Flic manager not initialized');
     return flicManager.startPairing();

@@ -466,11 +466,45 @@ class FlicManager extends EventEmitter {
                 this.connectionChannels.delete(bdAddr);
             }
 
-            // Delete from daemon
+            // Delete from daemon - this tells the button it's been unpaired
             this.client.deleteButton(bdAddr);
             console.log(`Removed button: ${bdAddr}`);
             this.emit('buttonRemoved', bdAddr);
             resolve();
+        });
+    }
+
+    /**
+     * Forget ALL buttons - removes them from daemon so they know they're unpaired
+     * Buttons will need to be re-paired after this
+     */
+    forgetAllButtons() {
+        return new Promise((resolve, reject) => {
+            if (!this.client) {
+                reject(new Error('Not connected to daemon'));
+                return;
+            }
+
+            this.client.getInfo((info) => {
+                const buttons = info.bdAddrOfVerifiedButtons || [];
+                console.log(`Forgetting ${buttons.length} button(s)...`);
+
+                buttons.forEach((bdAddr) => {
+                    // Remove connection channel
+                    if (this.connectionChannels.has(bdAddr)) {
+                        const channel = this.connectionChannels.get(bdAddr);
+                        this.client.removeConnectionChannel(channel);
+                        this.connectionChannels.delete(bdAddr);
+                    }
+
+                    // Delete from daemon
+                    this.client.deleteButton(bdAddr);
+                    console.log(`Forgot button: ${bdAddr}`);
+                    this.emit('buttonRemoved', bdAddr);
+                });
+
+                resolve(buttons.length);
+            });
         });
     }
 
