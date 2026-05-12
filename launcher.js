@@ -489,6 +489,17 @@ ipcMain.handle('reconnect-all-buttons', async () => {
     }
 });
 
+ipcMain.handle('restart-flic-daemon', async () => {
+    if (!flicManager) throw new Error('Flic manager not initialized');
+    try {
+        await flicManager.restart();
+        return { success: true };
+    } catch (err) {
+        console.error('Error restarting daemon:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 ipcMain.handle('start-button-pairing', async () => {
     if (!flicManager) throw new Error('Flic manager not initialized');
     return flicManager.startPairing();

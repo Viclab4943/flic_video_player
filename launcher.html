@@ -64,6 +64,9 @@
                 </div>
 
                 <div class="actions">
+                    <button class="btn btn-secondary" id="restartDaemonButton" onclick="restartDaemon()">
+                        Restart Daemon
+                    </button>
                     <button class="btn btn-secondary" id="reconnectButton" onclick="reconnectAllButtons()">
                         Reconnect All
                     </button>
@@ -416,6 +419,29 @@
             flicConfig.buttons[bdAddr].videoNumber = num;
             await window.electronAPI.setButtonMapping(bdAddr, num, flicConfig.buttons[bdAddr].name);
             showNotification(`Button mapped to Video ${num}`, 'success');
+        }
+
+        // Restart the Flic daemon completely
+        async function restartDaemon() {
+            const btn = document.getElementById('restartDaemonButton');
+            btn.disabled = true;
+            btn.textContent = 'Restarting...';
+
+            try {
+                const result = await window.electronAPI.restartFlicDaemon();
+                if (result.success) {
+                    showNotification('Daemon restarted successfully', 'success');
+                    // Refresh buttons after restart
+                    setTimeout(refreshButtons, 2000);
+                } else {
+                    showNotification(result.error || 'Restart failed', 'error');
+                }
+            } catch (err) {
+                showNotification(`Restart failed: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Restart Daemon';
+            }
         }
 
         // Reconnect all buttons (force fresh connection)

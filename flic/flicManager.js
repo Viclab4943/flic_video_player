@@ -589,6 +589,26 @@ class FlicManager extends EventEmitter {
     }
 
     /**
+     * Restart the daemon completely
+     * This clears all connection state and starts fresh
+     */
+    async restart() {
+        console.log('Restarting Flic daemon...');
+
+        // Stop everything
+        this.stop();
+
+        // Wait for cleanup
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Start fresh
+        await this.startDaemon();
+
+        console.log('Flic daemon restarted');
+        return true;
+    }
+
+    /**
      * Stop the daemon and clean up
      */
     stop() {
