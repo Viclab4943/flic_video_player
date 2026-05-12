@@ -5,6 +5,8 @@
   "main": "launcher.js",
   "scripts": {
     "start": "electron .",
+    "setup": "node scripts/download-flic-deps.js",
+    "prebuild": "node scripts/check-deps.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
@@ -29,6 +31,8 @@
     },
     "files": [
       "**/*",
+      "!scripts",
+      "!dist",
       "!flic/FlicSDK.exe",
       "!flic/flicd"
     ],
@@ -52,6 +56,8 @@
       "target": ["dmg", "zip"],
       "icon": "assets/icon.icns",
       "category": "public.app-category.video",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "extraResources": [
         {
           "from": "flic/flicd",
@@ -87,6 +93,7 @@
           "path": "/Applications"
         }
       ]
-    }
+    },
+    "afterPack": "scripts/after-pack.js"
   }
 }

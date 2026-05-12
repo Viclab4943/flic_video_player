@@ -17,6 +17,7 @@
             <!-- Video Configuration Section -->
             <section class="card">
                 <h2>Video Slots</h2>
+                <div id="videoWarnings" class="warnings-container hidden"></div>
                 <div class="video-slots">
                     <div class="video-slot">
                         <label>Default Video (loops when idle)</label>
@@ -41,6 +42,12 @@
                 <div class="status-bar" id="flicStatusBar">
                     <span class="status-indicator" id="flicStatusIndicator"></span>
                     <span id="flicStatusText">Initializing...</span>
+                </div>
+
+                <div id="flicErrorBox" class="error-box hidden">
+                    <div class="error-title">Flic Setup Required</div>
+                    <div id="flicErrorReason" class="error-reason"></div>
+                    <div id="flicErrorDetails" class="error-details"></div>
                 </div>
 
                 <div id="pairedButtonsList" class="buttons-list">
@@ -79,23 +86,101 @@
         let flicConfig = { buttons: {} };
         let buttonStatuses = {};
         let videoSlotCount = 0;
+        let missingVideoFiles = [];
+        let flicAvailable = false;
 
         // Initialize
         async function init() {
             await loadConfigs();
             setupEventListeners();
             renderVideoSlots();
+            showVideoWarnings();
+            await checkFlicAvailability();
             await refreshButtons();
         }
 
         // Load configurations
         async function loadConfigs() {
             try {
-                videoConfig = await window.electronAPI.getVideoConfig();
+                const result = await window.electronAPI.getVideoConfigValidated();
+                videoConfig = result.config;
+                missingVideoFiles = result.missingFiles || [];
                 flicConfig = await window.electronAPI.getFlicConfig();
             } catch (err) {
                 console.error('Error loading configs:', err);
+                videoConfig = await window.electronAPI.getVideoConfig();
             }
+        }
+
+        // Check Flic availability and show errors if needed
+        async function checkFlicAvailability() {
+            try {
+                const availability = await window.electronAPI.getFlicAvailability();
+                flicAvailable = availability.available;
+
+                const errorBox = document.getElementById('flicErrorBox');
+                const pairButton = document.getElementById('pairButton');
+
+                if (!availability.available) {
+                    errorBox.classList.remove('hidden');
+                    document.getElementById('flicErrorReason').textContent = availability.reason;
+                    document.getElementById('flicErrorDetails').textContent = availability.details || '';
+                    pairButton.disabled = true;
+
+                    // Update status bar
+                    updateFlicStatus({ status: 'error', message: 'Setup required' });
+                } else {
+                    errorBox.classList.add('hidden');
+                }
+            } catch (err) {
+                console.error('Error checking Flic availability:', err);
+            }
+        }
+
+        // Show warnings for missing video files
+        function showVideoWarnings() {
+            const container = document.getElementById('videoWarnings');
+
+            if (missingVideoFiles.length === 0) {
+                container.classList.add('hidden');
+                container.innerHTML = '';
+                return;
+            }
+
+            container.classList.remove('hidden');
+            const warningItems = missingVideoFiles.map(item => {
+                const slotLabel = item.slot === 'default' ? 'Default Video' : `Video ${item.slot}`;
+                return `<div class="warning-item">
+                    <span class="warning-icon">!</span>
+                    <span><strong>${slotLabel}:</strong> File not found - ${item.path}</span>
+                </div>`;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="warning-header">Missing Video Files</div>
+                ${warningItems}
+                <div class="warning-hint">These videos will not play. Please update the paths or remove the slots.</div>
+            `;
+        }
+
+        // Validate current config and update warnings
+        async function validateAndShowWarnings() {
+            const currentConfig = {
+                defaultVideo: document.getElementById('defaultVideo').value,
+                videos: {}
+            };
+
+            const slots = document.querySelectorAll('[id^="videoSlot"]');
+            slots.forEach((slot) => {
+                const num = slot.id.replace('videoSlot', '');
+                const input = document.getElementById(`video${num}`);
+                if (input && input.value) {
+                    currentConfig.videos[`video${num}`] = input.value;
+                }
+            });
+
+            missingVideoFiles = await window.electronAPI.validateVideoFiles(currentConfig);
+            showVideoWarnings();
         }
 
         // Setup IPC event listeners
@@ -384,9 +469,29 @@
             // Save config first
             await saveVideoConfig();
 
-            const success = await window.electronAPI.launchPlayer();
-            if (!success) {
-                showNotification('Failed to launch player', 'error');
+            // Validate video files exist
+            await validateAndShowWarnings();
+            if (missingVideoFiles.length > 0) {
+                const proceed = confirm(
+                    `Warning: ${missingVideoFiles.length} video file(s) are missing.\n\n` +
+                    'The player will launch, but some videos will not play.\n\n' +
+                    'Continue anyway?'
+                );
+                if (!proceed) return;
+            }
+
+            // Check if default video is configured
+            if (!videoConfig.defaultVideo) {
+                showNotification('Please set a default video before launching', 'error');
+                return;
+            }
+
+            // Show launching status
+            showNotification('Starting player...', 'info');
+
+            const result = await window.electronAPI.launchPlayer();
+            if (!result.success) {
+                showNotification(result.error || 'Failed to launch player', 'error');
             }
         }
 

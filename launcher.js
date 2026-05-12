@@ -7,7 +7,12 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const { spawn } = require('child_process');
+
+// Server ports
+const HTTP_PORT = 5555;
+const WS_PORT = 8765;
 
 // Flic Manager
 let FlicManager;
@@ -40,6 +45,92 @@ function ensureDirectories() {
     });
 }
 
+// Check if a port is available
+function checkPortAvailable(port) {
+    return new Promise((resolve) => {
+        const server = net.createServer();
+        server.once('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                resolve(false);
+            } else {
+                resolve(false);
+            }
+        });
+        server.once('listening', () => {
+            server.close();
+            resolve(true);
+        });
+        server.listen(port, '127.0.0.1');
+    });
+}
+
+// Check all required ports are available
+async function checkRequiredPorts() {
+    const ports = [
+        { port: HTTP_PORT, name: 'HTTP Server' },
+        { port: WS_PORT, name: 'WebSocket Server' }
+    ];
+
+    const unavailable = [];
+    for (const { port, name } of ports) {
+        const available = await checkPortAvailable(port);
+        if (!available) {
+            unavailable.push({ port, name });
+        }
+    }
+
+    return unavailable;
+}
+
+// Wait for server to be ready via health check
+function waitForServerReady(maxAttempts = 20, interval = 250) {
+    return new Promise((resolve, reject) => {
+        let attempts = 0;
+
+        const checkHealth = () => {
+            attempts++;
+
+            const req = http.request({
+                hostname: 'localhost',
+                port: HTTP_PORT,
+                path: '/health',
+                method: 'GET',
+                timeout: 1000
+            }, (res) => {
+                if (res.statusCode === 200) {
+                    resolve();
+                } else if (attempts < maxAttempts) {
+                    setTimeout(checkHealth, interval);
+                } else {
+                    reject(new Error('Server health check failed'));
+                }
+            });
+
+            req.on('error', () => {
+                if (attempts < maxAttempts) {
+                    setTimeout(checkHealth, interval);
+                } else {
+                    reject(new Error('Server failed to start - connection refused'));
+                }
+            });
+
+            req.on('timeout', () => {
+                req.destroy();
+                if (attempts < maxAttempts) {
+                    setTimeout(checkHealth, interval);
+                } else {
+                    reject(new Error('Server failed to start - timeout'));
+                }
+            });
+
+            req.end();
+        };
+
+        // Start checking after a brief delay for server to initialize
+        setTimeout(checkHealth, 500);
+    });
+}
+
 // Load video configuration
 function loadVideoConfig() {
     try {
@@ -53,6 +144,33 @@ function loadVideoConfig() {
         defaultVideo: '',
         videos: {}
     };
+}
+
+// Validate video files exist and return list of missing files
+function validateVideoFiles(config) {
+    const missing = [];
+
+    if (config.defaultVideo && !fs.existsSync(config.defaultVideo)) {
+        missing.push({ slot: 'default', path: config.defaultVideo });
+    }
+
+    if (config.videos) {
+        for (const [key, videoPath] of Object.entries(config.videos)) {
+            if (videoPath && !fs.existsSync(videoPath)) {
+                const slotNum = key.replace('video', '');
+                missing.push({ slot: slotNum, path: videoPath });
+            }
+        }
+    }
+
+    return missing;
+}
+
+// Load video config with validation
+function loadVideoConfigWithValidation() {
+    const config = loadVideoConfig();
+    const missingFiles = validateVideoFiles(config);
+    return { config, missingFiles };
 }
 
 // Save video configuration
@@ -142,7 +260,14 @@ function createPlayerWindow() {
 }
 
 // Start the Express/WebSocket server
-function startServer() {
+async function startServer() {
+    // Check if ports are available first
+    const unavailablePorts = await checkRequiredPorts();
+    if (unavailablePorts.length > 0) {
+        const portList = unavailablePorts.map(p => `${p.name} (port ${p.port})`).join(', ');
+        throw new Error(`Ports already in use: ${portList}. Please close any other instances or applications using these ports.`);
+    }
+
     return new Promise((resolve, reject) => {
         const serverPath = path.join(__dirname, 'server.js');
 
@@ -156,15 +281,15 @@ function startServer() {
             }
         });
 
+        let serverError = null;
+
         serverProcess.stdout.on('data', (data) => {
             console.log(`Server: ${data}`);
-            if (data.toString().includes('Server running')) {
-                resolve();
-            }
         });
 
         serverProcess.stderr.on('data', (data) => {
             console.error(`Server error: ${data}`);
+            serverError = data.toString();
         });
 
         serverProcess.on('error', (err) => {
@@ -174,10 +299,22 @@ function startServer() {
 
         serverProcess.on('exit', (code) => {
             console.log(`Server exited with code ${code}`);
+            if (code !== 0 && code !== null) {
+                reject(new Error(`Server exited unexpectedly with code ${code}: ${serverError || 'Unknown error'}`));
+            }
         });
 
-        // Resolve after timeout if no message received
-        setTimeout(resolve, 3000);
+        // Use health check polling instead of timeout fallback
+        waitForServerReady()
+            .then(resolve)
+            .catch((err) => {
+                // Kill the server process if it failed to become ready
+                if (serverProcess) {
+                    serverProcess.kill();
+                    serverProcess = null;
+                }
+                reject(err);
+            });
     });
 }
 
@@ -330,9 +467,15 @@ function returnToDefault() {
 
 // Video config handlers
 ipcMain.handle('get-video-config', () => loadVideoConfig());
+ipcMain.handle('get-video-config-validated', () => loadVideoConfigWithValidation());
 ipcMain.handle('save-video-config', (event, config) => saveVideoConfig(config));
+ipcMain.handle('validate-video-files', (event, config) => validateVideoFiles(config));
 ipcMain.handle('get-videos-path', () => videosPath);
 ipcMain.handle('get-cache-path', () => cachePath);
+ipcMain.handle('check-ports', async () => {
+    const unavailable = await checkRequiredPorts();
+    return { available: unavailable.length === 0, unavailable };
+});
 
 // File dialog handlers
 ipcMain.handle('select-video-file', async () => {
@@ -410,15 +553,67 @@ ipcMain.handle('get-bluetooth-status', async () => {
     }
 });
 
+ipcMain.handle('get-flic-availability', () => {
+    // Check if FlicManager module loaded
+    if (!FlicManager) {
+        return {
+            available: false,
+            reason: 'FlicManager module failed to load',
+            details: 'Check that all dependencies are installed correctly.'
+        };
+    }
+
+    // Check if fliclibNodeJs.js exists
+    const fliclibPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'flic', 'fliclibNodeJs.js')
+        : path.join(__dirname, 'flic', 'fliclibNodeJs.js');
+
+    if (!fs.existsSync(fliclibPath)) {
+        return {
+            available: false,
+            reason: 'Flic client library not found',
+            details: 'Download fliclibNodeJs.js from: https://github.com/50ButtonsEach/fliclib-linux-hci/tree/master/clientlib/nodejs',
+            missingFile: 'fliclibNodeJs.js'
+        };
+    }
+
+    // Check if daemon binary exists
+    const platform = process.platform;
+    let daemonName, daemonPath, downloadUrl;
+
+    if (platform === 'win32') {
+        daemonName = 'FlicSDK.exe';
+        downloadUrl = 'https://github.com/50ButtonsEach/fliclib-windows/releases';
+    } else {
+        daemonName = 'flicd';
+        downloadUrl = 'https://github.com/50ButtonsEach/fliclib-linux-hci';
+    }
+
+    daemonPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'flic', daemonName)
+        : path.join(__dirname, 'flic', daemonName);
+
+    if (!fs.existsSync(daemonPath)) {
+        return {
+            available: false,
+            reason: `Flic daemon not found: ${daemonName}`,
+            details: `Download from: ${downloadUrl}`,
+            missingFile: daemonName
+        };
+    }
+
+    return { available: true };
+});
+
 // Player control handlers
 ipcMain.handle('launch-player', async () => {
     try {
         await startServer();
         createPlayerWindow();
-        return true;
+        return { success: true };
     } catch (err) {
         console.error('Error launching player:', err);
-        return false;
+        return { success: false, error: err.message };
     }
 });
 

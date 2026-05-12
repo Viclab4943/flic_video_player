@@ -8,10 +8,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
     // Video configuration
     getVideoConfig: () => ipcRenderer.invoke('get-video-config'),
+    getVideoConfigValidated: () => ipcRenderer.invoke('get-video-config-validated'),
     saveVideoConfig: (config) => ipcRenderer.invoke('save-video-config', config),
+    validateVideoFiles: (config) => ipcRenderer.invoke('validate-video-files', config),
     getVideosPath: () => ipcRenderer.invoke('get-videos-path'),
     getCachePath: () => ipcRenderer.invoke('get-cache-path'),
     selectVideoFile: () => ipcRenderer.invoke('select-video-file'),
+
+    // Port and server checks
+    checkPorts: () => ipcRenderer.invoke('check-ports'),
 
     // Flic button configuration
     getFlicConfig: () => ipcRenderer.invoke('get-flic-config'),
@@ -25,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setButtonMapping: (bdAddr, videoNumber, name) =>
         ipcRenderer.invoke('set-button-mapping', bdAddr, videoNumber, name),
     getBluetoothStatus: () => ipcRenderer.invoke('get-bluetooth-status'),
+    getFlicAvailability: () => ipcRenderer.invoke('get-flic-availability'),
 
     // Player control
     launchPlayer: () => ipcRenderer.invoke('launch-player'),
