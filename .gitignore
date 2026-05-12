@@ -4,9 +4,9 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Downloaded Flic binaries
-flic/FlicSDK.exe
-flic/flicd
+# Downloaded Flic binaries (uncomment to exclude from git)
+# flic/FlicSDK.exe  # Included for Windows deployment
+flic/flicd          # Exclude Unix daemon (compile from source)
 
 # Video files
 *.mp4

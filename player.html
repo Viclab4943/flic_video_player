@@ -118,7 +118,7 @@
 
         // Connect to WebSocket server
         function connectWebSocket() {
-            ws = new WebSocket('ws://localhost:8765');
+            ws = new WebSocket('ws://127.0.0.1:8765');
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -350,7 +350,7 @@
         // Load default video from config
         async function loadDefaultVideo() {
             try {
-                const response = await fetch('http://localhost:5555/config');
+                const response = await fetch('http://127.0.0.1:5555/config');
                 const config = await response.json();
                 defaultVideoPath = config.defaultVideo;
 
@@ -375,7 +375,7 @@
             // Number keys 1-9 for videos
             if (e.key >= '1' && e.key <= '9') {
                 const videoNum = parseInt(e.key);
-                fetch('http://localhost:5555/changeVideo', {
+                fetch('http://127.0.0.1:5555/changeVideo', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ video: videoNum, click_type: 'click' })
@@ -384,7 +384,7 @@
 
             // 0 for default
             if (e.key === '0') {
-                fetch('http://localhost:5555/close', { method: 'POST' })
+                fetch('http://127.0.0.1:5555/close', { method: 'POST' })
                     .catch(err => console.error('Error:', err));
             }
 

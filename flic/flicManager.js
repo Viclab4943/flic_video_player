@@ -168,7 +168,7 @@ class FlicManager extends EventEmitter {
             }
 
             console.log('Connecting to Flic daemon...');
-            this.client = new fliclib.FlicClient('localhost', 5551);
+            this.client = new fliclib.FlicClient('127.0.0.1', 5551);
 
             this.client.on('ready', () => {
                 console.log('Connected to Flic daemon');

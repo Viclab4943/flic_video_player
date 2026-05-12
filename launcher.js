@@ -91,7 +91,7 @@ function waitForServerReady(maxAttempts = 20, interval = 250) {
             attempts++;
 
             const req = http.request({
-                hostname: 'localhost',
+                hostname: '127.0.0.1',
                 port: HTTP_PORT,
                 path: '/health',
                 method: 'GET',
@@ -433,7 +433,7 @@ function triggerVideo(videoNumber, clickType) {
     });
 
     const req = http.request({
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: 5555,
         path: '/changeVideo',
         method: 'POST',
@@ -454,7 +454,7 @@ function triggerVideo(videoNumber, clickType) {
 // Return to default video
 function returnToDefault() {
     const req = http.request({
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: 5555,
         path: '/close',
         method: 'POST'
