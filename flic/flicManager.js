@@ -184,9 +184,11 @@ class FlicManager extends EventEmitter {
                     console.log('Paired buttons:', info.bdAddrOfVerifiedButtons);
                     this.emit('info', info);
 
-                    // Force disconnect all buttons first, then reconnect fresh
-                    // This ensures clean connection state on each startup
-                    this.reconnectAllButtons(info.bdAddrOfVerifiedButtons);
+                    // Simply listen to all paired buttons
+                    // Don't force reconnect on startup - let buttons connect naturally
+                    info.bdAddrOfVerifiedButtons.forEach((bdAddr) => {
+                        this.listenToButton(bdAddr);
+                    });
                 });
 
                 resolve(this.client);
@@ -262,7 +264,7 @@ class FlicManager extends EventEmitter {
 
     /**
      * Force disconnect and reconnect all buttons for a clean state
-     * This helps prevent stale connections from previous sessions
+     * Use this manually when buttons become unresponsive
      */
     reconnectAllButtons(buttonAddresses) {
         if (!this.client || !buttonAddresses || buttonAddresses.length === 0) {
@@ -270,27 +272,39 @@ class FlicManager extends EventEmitter {
             return;
         }
 
-        console.log(`Forcing fresh connection for ${buttonAddresses.length} button(s)...`);
+        console.log(`Reconnecting ${buttonAddresses.length} button(s)...`);
 
-        // Remove all existing connection channels first
+        // Remove all existing connection channels
+        let removedCount = 0;
         buttonAddresses.forEach((bdAddr) => {
             if (this.connectionChannels.has(bdAddr)) {
                 console.log(`Removing channel: ${bdAddr}`);
                 const channel = this.connectionChannels.get(bdAddr);
                 this.client.removeConnectionChannel(channel);
                 this.connectionChannels.delete(bdAddr);
+                removedCount++;
             }
         });
 
-        // Wait a moment, then create fresh connection channels
+        // Wait longer if we actually removed channels
+        const waitTime = removedCount > 0 ? 2000 : 500;
+
         setTimeout(() => {
-            console.log('Creating fresh connection channels...');
-            buttonAddresses.forEach((bdAddr) => {
-                this.listenToButton(bdAddr);
+            console.log('Creating connection channels...');
+            buttonAddresses.forEach((bdAddr, index) => {
+                // Stagger the connections slightly to avoid overwhelming the adapter
+                setTimeout(() => {
+                    console.log(`Connecting to button: ${bdAddr}`);
+                    this.listenToButton(bdAddr);
+                }, index * 300);
             });
-            console.log('All buttons reconnected');
-            this.emit('buttonsReconnected', buttonAddresses);
-        }, 1000);
+
+            // Emit event after all buttons have been queued
+            setTimeout(() => {
+                console.log('All buttons reconnection initiated');
+                this.emit('buttonsReconnected', buttonAddresses);
+            }, buttonAddresses.length * 300 + 100);
+        }, waitTime);
     }
 
     /**
@@ -325,7 +339,15 @@ class FlicManager extends EventEmitter {
         });
 
         channel.on('connectionStatusChanged', (status, disconnectReason) => {
-            console.log(`Button ${bdAddr} status: ${status}`);
+            console.log(`Button ${bdAddr} status: ${status}${disconnectReason ? ` (reason: ${disconnectReason})` : ''}`);
+
+            // Log specific issues that might help debugging
+            if (disconnectReason === 'BondingKeysMismatch') {
+                console.warn(`Button ${bdAddr}: Bonding keys mismatch - try holding button for 7 seconds to reset`);
+            } else if (disconnectReason === 'ConnectionEstablishmentFailed') {
+                console.warn(`Button ${bdAddr}: Connection failed - button may be out of range`);
+            }
+
             this.emit('buttonStatusChanged', {
                 bdAddr,
                 status,
