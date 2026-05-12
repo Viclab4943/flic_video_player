@@ -272,10 +272,14 @@ class FlicManager extends EventEmitter {
 
         console.log(`Forcing fresh connection for ${buttonAddresses.length} button(s)...`);
 
-        // Force disconnect all buttons first
+        // Remove all existing connection channels first
         buttonAddresses.forEach((bdAddr) => {
-            console.log(`Force disconnecting: ${bdAddr}`);
-            this.client.forceDisconnect(bdAddr);
+            if (this.connectionChannels.has(bdAddr)) {
+                console.log(`Removing channel: ${bdAddr}`);
+                const channel = this.connectionChannels.get(bdAddr);
+                this.client.removeConnectionChannel(channel);
+                this.connectionChannels.delete(bdAddr);
+            }
         });
 
         // Wait a moment, then create fresh connection channels
