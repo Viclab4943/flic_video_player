@@ -23,6 +23,12 @@ try {
 // Platform detection
 const platform = process.platform; // 'win32', 'darwin', 'linux'
 
+// Persistent database path - stored in user data directory to survive app updates
+function getDaemonDbPath() {
+    const userDataPath = app.getPath('userData');
+    return path.join(userDataPath, 'flicd.sqlite');
+}
+
 class FlicManager extends EventEmitter {
     constructor() {
         super();
@@ -36,6 +42,13 @@ class FlicManager extends EventEmitter {
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
         this.maxEventAgeMs = 5000; // Ignore queued events older than this
+
+        // Health monitoring
+        this.healthCheckInterval = null;
+        this.healthCheckFrequency = 30000; // Check every 30 seconds
+        this.lastControllerState = null;
+        this.buttonStates = new Map(); // Track each button's connection state
+        this.disconnectedButtons = new Set(); // Buttons that need reconnection
     }
 
     /**
@@ -56,13 +69,13 @@ class FlicManager extends EventEmitter {
             case 'darwin':
                 return {
                     path: path.join(baseDir, 'flicd'),
-                    args: ['-f', '-s', '0.0.0.0', '-p', '5551'],
+                    args: ['-f', '-d', getDaemonDbPath(), '-s', '0.0.0.0', '-p', '5551'],
                     downloadUrl: 'https://github.com/50ButtonsEach/fliclib-linux-hci (compile for macOS)'
                 };
             case 'linux':
                 return {
                     path: path.join(baseDir, 'flicd'),
-                    args: ['-f', '-s', '0.0.0.0', '-p', '5551'],
+                    args: ['-f', '-d', getDaemonDbPath(), '-s', '0.0.0.0', '-p', '5551'],
                     downloadUrl: 'https://github.com/50ButtonsEach/fliclib-linux-hci'
                 };
             default:
@@ -120,11 +133,20 @@ class FlicManager extends EventEmitter {
                 return;
             }
 
+            // Ensure userData directory exists for the database
+            const userDataPath = app.getPath('userData');
+            if (!fs.existsSync(userDataPath)) {
+                fs.mkdirSync(userDataPath, { recursive: true });
+            }
+
             const daemonPath = info.path;
             const daemonArgs = info.args;
 
             console.log(`Starting Flic daemon from: ${daemonPath}`);
             console.log(`Platform: ${platform}, Args: ${daemonArgs.join(' ')}`);
+            if (platform !== 'win32') {
+                console.log(`Flic database path: ${getDaemonDbPath()}`);
+            }
 
             const spawnOptions = {
                 stdio: 'ignore',
@@ -182,13 +204,16 @@ class FlicManager extends EventEmitter {
                 this.client.getInfo((info) => {
                     console.log('Bluetooth controller state:', info.bluetoothControllerState);
                     console.log('Paired buttons:', info.bdAddrOfVerifiedButtons);
+                    this.lastControllerState = info.bluetoothControllerState;
                     this.emit('info', info);
 
-                    // Simply listen to all paired buttons
-                    // Don't force reconnect on startup - let buttons connect naturally
+                    // Listen to all paired buttons
                     info.bdAddrOfVerifiedButtons.forEach((bdAddr) => {
                         this.listenToButton(bdAddr);
                     });
+
+                    // Health monitoring disabled for now - can be re-enabled if stable
+                    // this.startHealthMonitoring();
                 });
 
                 resolve(this.client);
@@ -218,13 +243,24 @@ class FlicManager extends EventEmitter {
             // States: Detached (lost connection), Resetting (reinitializing), Attached (ready)
             this.client.on('bluetoothControllerStateChange', (state) => {
                 console.log('Bluetooth controller state changed:', state);
+                const previousState = this.lastControllerState;
+                this.lastControllerState = state;
                 this.emit('bluetoothStateChanged', state);
 
                 if (state === 'Detached') {
                     console.warn('Bluetooth controller detached - check USB adapter');
                     this.emit('error', new Error('Bluetooth controller detached'));
+                    // Mark all buttons as needing reconnection
+                    this.connectionChannels.forEach((channel, bdAddr) => {
+                        this.disconnectedButtons.add(bdAddr);
+                    });
                 } else if (state === 'Attached') {
                     console.log('Bluetooth controller attached and ready');
+                    // Auto-recover: reconnect buttons that were disconnected
+                    if (previousState === 'Detached' || previousState === 'Resetting') {
+                        console.log('Controller recovered - reconnecting buttons...');
+                        this.recoverButtonConnections();
+                    }
                 }
             });
 
@@ -239,6 +275,97 @@ class FlicManager extends EventEmitter {
                 this.emit('connectionSlotAvailable', maxConcurrentlyConnectedButtons);
             });
         });
+    }
+
+    /**
+     * Start health monitoring
+     */
+    startHealthMonitoring() {
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+        }
+
+        console.log('Starting health monitoring...');
+        this.healthCheckInterval = setInterval(() => {
+            this.performHealthCheck();
+        }, this.healthCheckFrequency);
+    }
+
+    /**
+     * Stop health monitoring
+     */
+    stopHealthMonitoring() {
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+        }
+    }
+
+    /**
+     * Perform health check on daemon and buttons
+     */
+    performHealthCheck() {
+        if (!this.client || !this.isConnected) {
+            console.log('Health check: Not connected to daemon');
+            return;
+        }
+
+        // Check daemon is responsive
+        this.client.getInfo((info) => {
+            console.log(`Health check: Controller=${info.bluetoothControllerState}, Buttons=${info.bdAddrOfVerifiedButtons.length}`);
+
+            // Check for buttons that are verified but not being listened to
+            info.bdAddrOfVerifiedButtons.forEach((bdAddr) => {
+                if (!this.connectionChannels.has(bdAddr)) {
+                    console.log(`Health check: Button ${bdAddr} not connected, reconnecting...`);
+                    this.listenToButton(bdAddr);
+                }
+            });
+
+            // Check for buttons stuck in non-Ready state
+            this.buttonStates.forEach((state, bdAddr) => {
+                if (state === 'Disconnected' && this.connectionChannels.has(bdAddr)) {
+                    console.log(`Health check: Button ${bdAddr} disconnected, refreshing channel...`);
+                    this.disconnectedButtons.add(bdAddr);
+                }
+            });
+
+            // Recover any disconnected buttons
+            if (this.disconnectedButtons.size > 0) {
+                this.recoverButtonConnections();
+            }
+        });
+    }
+
+    /**
+     * Recover button connections after Bluetooth adapter comes back
+     */
+    recoverButtonConnections() {
+        if (this.disconnectedButtons.size === 0) {
+            return;
+        }
+
+        console.log(`Recovering ${this.disconnectedButtons.size} button connection(s)...`);
+
+        const buttonsToRecover = Array.from(this.disconnectedButtons);
+        this.disconnectedButtons.clear();
+
+        // Stagger reconnections
+        buttonsToRecover.forEach((bdAddr, index) => {
+            setTimeout(() => {
+                console.log(`Recovering button: ${bdAddr}`);
+                // Remove old channel if exists
+                if (this.connectionChannels.has(bdAddr)) {
+                    const oldChannel = this.connectionChannels.get(bdAddr);
+                    this.client.removeConnectionChannel(oldChannel);
+                    this.connectionChannels.delete(bdAddr);
+                }
+                // Create fresh channel
+                this.listenToButton(bdAddr);
+            }, index * 500);
+        });
+
+        this.emit('buttonsRecovered', buttonsToRecover);
     }
 
     /**
@@ -341,11 +468,25 @@ class FlicManager extends EventEmitter {
         channel.on('connectionStatusChanged', (status, disconnectReason) => {
             console.log(`Button ${bdAddr} status: ${status}${disconnectReason ? ` (reason: ${disconnectReason})` : ''}`);
 
+            // Track button state for health monitoring
+            this.buttonStates.set(bdAddr, status);
+
             // Log specific issues that might help debugging
             if (disconnectReason === 'BondingKeysMismatch') {
                 console.warn(`Button ${bdAddr}: Bonding keys mismatch - try holding button for 7 seconds to reset`);
             } else if (disconnectReason === 'ConnectionEstablishmentFailed') {
                 console.warn(`Button ${bdAddr}: Connection failed - button may be out of range`);
+            }
+
+            // If button disconnected unexpectedly, mark for recovery
+            if (status === 'Disconnected' && disconnectReason && disconnectReason !== 'Unspecified') {
+                console.log(`Button ${bdAddr} will be recovered on next health check`);
+                this.disconnectedButtons.add(bdAddr);
+            }
+
+            // If button reached Ready state, remove from recovery list
+            if (status === 'Ready') {
+                this.disconnectedButtons.delete(bdAddr);
             }
 
             this.emit('buttonStatusChanged', {
@@ -368,6 +509,9 @@ class FlicManager extends EventEmitter {
                 reject(new Error('Not connected to daemon'));
                 return;
             }
+
+            // Pause health monitoring during pairing to avoid interference
+            this.stopHealthMonitoring();
 
             if (this.scanWizard) {
                 this.client.removeScanWizard(this.scanWizard);
@@ -406,6 +550,9 @@ class FlicManager extends EventEmitter {
 
             this.scanWizard.on('completed', (result, bdAddr, name) => {
                 console.log(`Pairing result: ${result}`);
+
+                // Resume health monitoring
+                this.startHealthMonitoring();
 
                 if (result === 'WizardSuccess') {
                     this.emit('pairingStatus', {
@@ -446,6 +593,8 @@ class FlicManager extends EventEmitter {
                 status: 'cancelled',
                 message: 'Pairing cancelled'
             });
+            // Resume health monitoring
+            this.startHealthMonitoring();
         }
     }
 
@@ -647,6 +796,13 @@ class FlicManager extends EventEmitter {
      */
     stop() {
         console.log('Stopping FlicManager...');
+
+        // Stop health monitoring
+        this.stopHealthMonitoring();
+
+        // Clear state tracking
+        this.buttonStates.clear();
+        this.disconnectedButtons.clear();
 
         // Cancel any ongoing pairing
         this.cancelPairing();
