@@ -29,6 +29,63 @@ function getDaemonDbPath() {
     return path.join(userDataPath, 'flicd.sqlite');
 }
 
+// Backup path for the database
+function getDaemonDbBackupPath() {
+    const userDataPath = app.getPath('userData');
+    return path.join(userDataPath, 'flicd.sqlite.backup');
+}
+
+// Backup the daemon database after successful pairing
+function backupDaemonDb() {
+    const dbPath = getDaemonDbPath();
+    const backupPath = getDaemonDbBackupPath();
+
+    try {
+        if (fs.existsSync(dbPath)) {
+            fs.copyFileSync(dbPath, backupPath);
+            console.log(`Flic database backed up to: ${backupPath}`);
+            return true;
+        }
+    } catch (err) {
+        console.error('Failed to backup Flic database:', err.message);
+    }
+    return false;
+}
+
+// Restore database from backup if main database is missing
+function restoreDaemonDbIfNeeded() {
+    const dbPath = getDaemonDbPath();
+    const backupPath = getDaemonDbBackupPath();
+
+    // If main database exists, no need to restore
+    if (fs.existsSync(dbPath)) {
+        const stats = fs.statSync(dbPath);
+        if (stats.size > 0) {
+            console.log('Flic database exists and is valid');
+            return false;
+        }
+        console.warn('Flic database exists but is empty, will restore from backup');
+    }
+
+    // Try to restore from backup
+    if (fs.existsSync(backupPath)) {
+        try {
+            const backupStats = fs.statSync(backupPath);
+            if (backupStats.size > 0) {
+                fs.copyFileSync(backupPath, dbPath);
+                console.log(`Flic database restored from backup: ${backupPath}`);
+                return true;
+            }
+        } catch (err) {
+            console.error('Failed to restore Flic database from backup:', err.message);
+        }
+    } else {
+        console.log('No Flic database backup found (this is normal for first run)');
+    }
+
+    return false;
+}
+
 class FlicManager extends EventEmitter {
     constructor() {
         super();
@@ -139,6 +196,11 @@ class FlicManager extends EventEmitter {
                 fs.mkdirSync(userDataPath, { recursive: true });
             }
 
+            // Restore database from backup if main database is missing (macOS/Linux only)
+            if (platform !== 'win32') {
+                restoreDaemonDbIfNeeded();
+            }
+
             const daemonPath = info.path;
             const daemonArgs = info.args;
 
@@ -237,6 +299,13 @@ class FlicManager extends EventEmitter {
                 console.log('New button paired:', bdAddr);
                 this.emit('buttonPaired', bdAddr);
                 this.listenToButton(bdAddr);
+
+                // Backup database after successful pairing (macOS/Linux only)
+                if (platform !== 'win32') {
+                    setTimeout(() => {
+                        backupDaemonDb();
+                    }, 1000); // Small delay to ensure daemon has written to database
+                }
             });
 
             // Monitor Bluetooth controller state changes
