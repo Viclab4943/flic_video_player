@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.videoplayerapp.flic",
-    "productName": "Flic Video Player",
+    "productName": "flic-video-player",
     "directories": {
       "output": "dist"
     },
