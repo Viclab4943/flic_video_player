@@ -269,9 +269,11 @@ class FlicManager extends EventEmitter {
                     this.lastControllerState = info.bluetoothControllerState;
                     this.emit('info', info);
 
-                    // Listen to all paired buttons
+                    // Listen to all paired buttons and emit event for each
+                    // so launcher can ensure they're in the config
                     info.bdAddrOfVerifiedButtons.forEach((bdAddr) => {
                         this.listenToButton(bdAddr);
+                        this.emit('existingButtonFound', bdAddr);
                     });
 
                     // Health monitoring disabled for now - can be re-enabled if stable

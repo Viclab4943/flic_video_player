@@ -344,6 +344,18 @@ async function initFlicManager() {
     });
 
     flicManager.on('buttonPaired', (bdAddr) => {
+        // Automatically assign default video mapping for new buttons
+        const config = loadFlicConfig();
+        if (!config.buttons[bdAddr]) {
+            const buttonNumber = Object.keys(config.buttons).length + 1;
+            config.buttons[bdAddr] = {
+                name: `Button ${buttonNumber}`,
+                videoNumber: 1  // Default to video 1
+            };
+            saveFlicConfig(config);
+            console.log(`New button ${bdAddr} auto-assigned to video 1`);
+        }
+
         if (launcherWindow) {
             launcherWindow.webContents.send('button-paired', bdAddr);
         }
@@ -352,6 +364,20 @@ async function initFlicManager() {
     flicManager.on('buttonRemoved', (bdAddr) => {
         if (launcherWindow) {
             launcherWindow.webContents.send('button-removed', bdAddr);
+        }
+    });
+
+    // Handle existing buttons found on startup - ensure they're in the config
+    flicManager.on('existingButtonFound', (bdAddr) => {
+        const config = loadFlicConfig();
+        if (!config.buttons[bdAddr]) {
+            const buttonNumber = Object.keys(config.buttons).length + 1;
+            config.buttons[bdAddr] = {
+                name: `Button ${buttonNumber}`,
+                videoNumber: 1  // Default to video 1
+            };
+            saveFlicConfig(config);
+            console.log(`Existing button ${bdAddr} added to config with video 1`);
         }
     });
 
